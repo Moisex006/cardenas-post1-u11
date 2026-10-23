@@ -1,8 +1,7 @@
 # Post-contenido — Unidad 11: Buenas Prácticas y Patrones de Diseño
 
 ## Descripción
-Repositorio del laboratorio de la Unidad 11 de Programación Web —
-Séptimo Semestre. Contiene un único proyecto Maven Spring Boot
+Repositorio del laboratorio de la Unidad 11 de Programación Web. Contiene un único proyecto Maven Spring Boot
 (`pedidos/`) que parte de un código con violaciones reales de SOLID
 (SRP y DIP), SQL embebido y una entidad JPA expuesta directamente en
 la API, y lo refactoriza aplicando arquitectura en capas, el patrón
