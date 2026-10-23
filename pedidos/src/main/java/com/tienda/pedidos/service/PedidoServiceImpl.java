@@ -6,6 +6,8 @@ import com.tienda.pedidos.entity.Pedido;
 import com.tienda.pedidos.exception.RecursoNoEncontradoException;
 import com.tienda.pedidos.repository.PedidoRepository;
 import com.tienda.pedidos.strategy.EstrategiaDescuento;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -17,6 +19,7 @@ import java.util.Map;
 @Service
 public class PedidoServiceImpl implements PedidoService {
 
+    private static final Logger log = LoggerFactory.getLogger(PedidoServiceImpl.class);
     private static final double IVA = 0.19;
 
     private final PedidoRepository repo;
@@ -33,18 +36,27 @@ public class PedidoServiceImpl implements PedidoService {
         this.estrategias = estrategias;
     }
 
+    // Los mensajes de log solo llevan identificadores y montos: nunca notasInternas
     @Override
     public PedidoResponseDTO crear(PedidoRequestDTO dto) {
-        EstrategiaDescuento estrategia = estrategias.getOrDefault(
-            dto.getTipoCliente().toUpperCase(), estrategias.get("REGULAR"));
+        log.info("Creando pedido: clienteEmail={}, tipoCliente={}",
+                 dto.getClienteEmail(), dto.getTipoCliente());
+        String tipo = dto.getTipoCliente().toUpperCase();
+        if (!estrategias.containsKey(tipo)) {
+            log.warn("Tipo de cliente desconocido tipoCliente={}, se aplica el descuento REGULAR", tipo);
+        }
+        EstrategiaDescuento estrategia = estrategias.getOrDefault(tipo, estrategias.get("REGULAR"));
         double descuento = redondear(estrategia.calcularDescuento(dto.getSubtotal()));
+        // Único punto de auditoría del descuento (no un log en cada Strategy)
+        log.info("Descuento aplicado: pedido para clienteEmail={}, tipoCliente={}, descuento={}",
+                 dto.getClienteEmail(), tipo, descuento);
         double baseConDescuento = dto.getSubtotal() - descuento;
         double iva = redondear(baseConDescuento * IVA);
         double total = redondear(baseConDescuento + iva);
 
         Pedido pedido = new Pedido();
         pedido.setClienteEmail(dto.getClienteEmail());
-        pedido.setTipoCliente(dto.getTipoCliente().toUpperCase());
+        pedido.setTipoCliente(tipo);
         pedido.setSubtotal(dto.getSubtotal());
         pedido.setDescuento(descuento);
         pedido.setIva(iva);
@@ -54,20 +66,33 @@ public class PedidoServiceImpl implements PedidoService {
         pedido.setFechaCreacion(LocalDateTime.now());
 
         Pedido guardado = repo.save(pedido);
-        notificador.enviarConfirmacion(guardado.getClienteEmail(), guardado.getTotal());
+        log.info("Pedido creado exitosamente con id={}, total={}", guardado.getId(), guardado.getTotal());
+        try {
+            notificador.enviarConfirmacion(guardado.getClienteEmail(), guardado.getTotal());
+        } catch (RuntimeException ex) {
+            // El pedido ya quedó guardado: un fallo del correo no debe anularlo,
+            // pero se registra como ERROR para que soporte lo reenvíe
+            log.error("No se pudo enviar la confirmacion del pedido id={}", guardado.getId(), ex);
+        }
         return toResponseDTO(guardado);
     }
 
     @Override
     public PedidoResponseDTO buscarPorId(Long id) {
-        Pedido p = repo.findById(id)
-            .orElseThrow(() -> new RecursoNoEncontradoException("Pedido", id));
+        log.debug("Buscando pedido con id={}", id);
+        Pedido p = repo.findById(id).orElseThrow(() -> {
+            log.warn("Pedido con id={} no encontrado", id);
+            return new RecursoNoEncontradoException("Pedido", id);
+        });
         return toResponseDTO(p);
     }
 
     @Override
     public List<PedidoResponseDTO> listarPorCliente(String clienteEmail) {
-        return repo.findByClienteEmail(clienteEmail).stream().map(this::toResponseDTO).toList();
+        List<PedidoResponseDTO> pedidos = repo.findByClienteEmail(clienteEmail).stream()
+            .map(this::toResponseDTO).toList();
+        log.debug("Consulta de pedidos: clienteEmail={}, encontrados={}", clienteEmail, pedidos.size());
+        return pedidos;
     }
 
     // Montos en pesos con 2 decimales: evita arrastrar errores de punto flotante
