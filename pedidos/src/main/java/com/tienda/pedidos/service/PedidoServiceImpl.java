@@ -5,9 +5,11 @@ import com.tienda.pedidos.dto.PedidoResponseDTO;
 import com.tienda.pedidos.entity.Pedido;
 import com.tienda.pedidos.exception.RecursoNoEncontradoException;
 import com.tienda.pedidos.repository.PedidoRepository;
+import com.tienda.pedidos.strategy.EstrategiaDescuento;
 import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 // SRP: orquesta el caso de uso (cálculo, persistencia y notificación); la
 // validación de entrada queda en el DTO y el acceso a datos en el repositorio.
@@ -19,15 +21,23 @@ public class PedidoServiceImpl implements PedidoService {
 
     private final PedidoRepository repo;
     private final NotificacionService notificador;
+    private final Map<String, EstrategiaDescuento> estrategias;
 
-    public PedidoServiceImpl(PedidoRepository repo, NotificacionService notificador) {
+    // Spring puebla el mapa con todos los beans EstrategiaDescuento, usando el
+    // nombre de cada bean (REGULAR, VIP, MAYORISTA) como llave
+    public PedidoServiceImpl(PedidoRepository repo,
+                             NotificacionService notificador,
+                             Map<String, EstrategiaDescuento> estrategias) {
         this.repo = repo;
         this.notificador = notificador;
+        this.estrategias = estrategias;
     }
 
     @Override
     public PedidoResponseDTO crear(PedidoRequestDTO dto) {
-        double descuento = redondear(calcularDescuento(dto.getTipoCliente(), dto.getSubtotal()));
+        EstrategiaDescuento estrategia = estrategias.getOrDefault(
+            dto.getTipoCliente().toUpperCase(), estrategias.get("REGULAR"));
+        double descuento = redondear(estrategia.calcularDescuento(dto.getSubtotal()));
         double baseConDescuento = dto.getSubtotal() - descuento;
         double iva = redondear(baseConDescuento * IVA);
         double total = redondear(baseConDescuento + iva);
@@ -58,16 +68,6 @@ public class PedidoServiceImpl implements PedidoService {
     @Override
     public List<PedidoResponseDTO> listarPorCliente(String clienteEmail) {
         return repo.findByClienteEmail(clienteEmail).stream().map(this::toResponseDTO).toList();
-    }
-
-    // Lógica trasladada desde el controller; en el siguiente paso se reemplaza por Strategy
-    private double calcularDescuento(String tipoCliente, double subtotal) {
-        if ("VIP".equalsIgnoreCase(tipoCliente)) {
-            return subtotal * 0.15;
-        } else if ("MAYORISTA".equalsIgnoreCase(tipoCliente)) {
-            return subtotal * 0.25;
-        }
-        return 0.0;
     }
 
     // Montos en pesos con 2 decimales: evita arrastrar errores de punto flotante
